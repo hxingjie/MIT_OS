@@ -111,4 +111,42 @@ result:
     == Test sleep, returns == sleep, returns: OK (0.9s) 
     == Test sleep, makes syscall == sleep, makes syscall: OK (1.1s)
 
+## pingpong
+```c
+// pingpong.c
+#include "kernel/types.h"
+#include "kernel/stat.h"
+#include "user/user.h"
 
+int main(int argc, char * argv[]) {
+    // 创建管道会得到长度为2的int数组
+    // [0]为从管道读取数据的文件描述符, [1]为向管道写入数据的文件描述符
+    int parent2child[2];
+    int child2parent[2];
+    pipe(parent2child);
+    pipe(child2parent);
+
+    //char message[] = "pingpong"; // size == 9
+
+    int pid = fork(); // 一次调用两次返回, 父进程中返回子进程的pid, 子进程中返回0
+    if (pid != 0) { // parent
+        write(parent2child[1], "ping", 5);
+        char buf[5];
+        read(child2parent[0], buf, 5);
+        printf("%d: received %s\n", getpid(), buf);
+    } else { // child
+        char buf[5];
+        read(parent2child[0], buf, 5);
+        printf("%d: received %s\n", getpid(), buf);
+        write(child2parent[1], "pong", 5);
+    }
+    
+    close(parent2child[0]);
+    close(parent2child[1]);
+    close(child2parent[0]);
+    close(child2parent[0]);
+
+    exit(0);
+}
+
+```
