@@ -5,8 +5,13 @@ https://cn.ubuntu.com/download/alternative-downloads
 
 ## config for os 6.081
 ```
-sudo apt-get install git build-essential gdb-multiarch gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
-sudo apt-get install qemu-system-misc=1:4.2-3ubuntu6
+sudo apt update
+sudo apt install gcc
+sudo apt install make cmake
+sudp apt install vim
+
+sudo apt install git build-essential gdb-multiarch gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+sudo apt install qemu-system-misc=1:4.2-3ubuntu6
 
 riscv64-unknown-elf-gcc --version // 检查
 sudo apt install gcc-riscv64-unknown-elf // 显示缺失
@@ -23,12 +28,12 @@ ls // 成功显示文件即表示配置完成
 ctrl+p, 打印进程信息
 ctrl+a, 再按x即可退出
 
-sudo apt-get install openssh-server // 安装ssh
+sudo apt install openssh-server // 安装ssh
 sudo service ssh start // 启动ssh
 sudo ufw disable // 关闭防火墙
 sudo service ssh status // 查看状态
 sudo apt install net-tools
-ifcong // 查看ip
+ifconfig // 查看ip
 
 windows -> cmd: ping ip // 检查是否能ping通
 
