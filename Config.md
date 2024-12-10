@@ -59,3 +59,58 @@ int main() {
 ```
 g++ -o hello hello.cpp
 ./hello
+
+## write app
+```makefile
+UPROGS=\
+  # ...
+	$U/_copy\
+	$U/_hello\
+	$U/_open\
+```
+
+```c
+#include "kernel/types.h"
+#include "user/user.h"
+
+int main() {
+    char buf[64];
+
+    while (1) {
+        int sz = read(0, buf, sizeof(buf));
+        if (sz <= 0) {
+            break;
+        }
+
+        write(1, buf, sz);
+    }
+
+    exit(0);
+}
+```
+
+```c
+#include "kernel/types.h"
+#include "user/user.h"
+
+int main() {
+    char msg[] = "hello, world.";
+    printf("%s, %d\n", msg, strlen(msg));
+
+    exit(0);
+}
+```
+
+```c
+#include "kernel/types.h"
+#include "user/user.h"
+
+#include "kernel/fcntl.h"
+
+int main() {
+    int fd = open("output.txt", O_WRONLY | O_CREATE);
+    write(fd, "hello, world.\n", 14);
+
+    exit(0);
+}
+```
