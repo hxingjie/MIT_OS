@@ -70,8 +70,6 @@ https://static.dev.sifive.com/dev-tools/riscv64-unknown-elf-gcc-8.3.0-2020.04.1-
 mv riscv64-unknown-elf-gcc-8.3.0-2020.04.1-x86_64-linux-ubuntu14/bin/riscv64-unknown-elf-gdb ~/
 chmod 777 ~/riscv64-unknown-elf-gdb
 echo add-auto-load-safe-path /home/hxj/Projects/xv6-labs-2020/.gdbinit > ~/.gdbinit
-
-
 ```
 
 ```shell
