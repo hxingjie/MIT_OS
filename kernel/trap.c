@@ -77,12 +77,19 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  //   if(which_dev == 2)
+  //     yield();
+    if(which_dev == 2) {
+        yield();
+        if (p->ticks > 0) {
+        	p->tick_timer += 1;
+        }
+    }
 
   usertrapret();
 }
 
+void save_trapframe(struct proc* p);
 //
 // return to user space
 //
@@ -116,7 +123,14 @@ usertrapret(void)
   w_sstatus(x);
 
   // set S Exception Program Counter to the saved user pc.
-  w_sepc(p->trapframe->epc);
+  //w_sepc(p->trapframe->epc);
+    if (p->ticks > 0 && p->in_handler == 0 && p->tick_timer == p->ticks) {
+        p->in_handler = 1;
+        save_trapframe(p);
+        w_sepc(p->handler);
+    } else {
+      	w_sepc(p->trapframe->epc);
+    }
 
   // tell trampoline.S the user page table to switch to.
   uint64 satp = MAKE_SATP(p->pagetable);
@@ -218,3 +232,44 @@ devintr()
   }
 }
 
+void save_trapframe(struct proc* p) {
+    p->src_trapframe.kernel_satp = p->trapframe->kernel_satp;   // kernel page table
+    p->src_trapframe.kernel_sp = p->trapframe->kernel_sp;     // top of process's kernel stack
+    p->src_trapframe.kernel_trap = p->trapframe->kernel_trap;   // usertrap()
+    p->src_trapframe.epc = p->trapframe->epc;           // saved user program counter
+    p->src_trapframe.kernel_hartid = p->trapframe->kernel_hartid; // saved kernel tp
+    p->src_trapframe.ra = p->trapframe->ra;
+    p->src_trapframe.sp = p->trapframe->sp;
+    p->src_trapframe.gp = p->trapframe->gp;
+    p->src_trapframe.tp = p->trapframe->tp;
+    p->src_trapframe.t0 = p->trapframe->t0;
+    p->src_trapframe.t1 = p->trapframe->t1;
+    p->src_trapframe.t2 = p->trapframe->t2;
+    p->src_trapframe.s0 = p->trapframe->s0;
+    p->src_trapframe.s1 = p->trapframe->s1;
+
+    p->src_trapframe.a0 = p->trapframe->a0;
+    p->src_trapframe.a1 = p->trapframe->a1;
+    p->src_trapframe.a2 = p->trapframe->a2;
+    p->src_trapframe.a3 = p->trapframe->a3;
+    p->src_trapframe.a4 = p->trapframe->a4;
+    p->src_trapframe.a5 = p->trapframe->a5;
+    p->src_trapframe.a6 = p->trapframe->a6;
+    p->src_trapframe.a7 = p->trapframe->a7;
+
+    p->src_trapframe.s2 = p->trapframe->s2;
+    p->src_trapframe.s3 = p->trapframe->s3;
+    p->src_trapframe.s4 = p->trapframe->s4;
+    p->src_trapframe.s5 = p->trapframe->s5;
+    p->src_trapframe.s6 = p->trapframe->s6;
+    p->src_trapframe.s7 = p->trapframe->s7;
+    p->src_trapframe.s8 = p->trapframe->s8;
+    p->src_trapframe.s9 = p->trapframe->s9;
+    p->src_trapframe.s10 = p->trapframe->s10;
+    p->src_trapframe.s11 = p->trapframe->s11;
+
+    p->src_trapframe.t3 = p->trapframe->t3;
+    p->src_trapframe.t4 = p->trapframe->t4;
+    p->src_trapframe.t5 = p->trapframe->t5;
+    p->src_trapframe.t6 = p->trapframe->t6;
+}
