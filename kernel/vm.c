@@ -6,6 +6,9 @@
 #include "defs.h"
 #include "fs.h"
 
+#include "spinlock.h"
+#include "proc.h"
+
 /*
  * the kernel's page table.
  */
@@ -180,10 +183,10 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    if((pte = walk(pagetable, a, 0)) == 0) // level 2 or level 1 ‘s pte is not valid
+      continue; // lab 4.2
+    if((*pte & PTE_V) == 0) // level 0 's pte is not valid
+      continue; // lab 4.2
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -282,7 +285,7 @@ freewalk(pagetable_t pagetable)
       uint64 child = PTE2PA(pte);
       freewalk((pagetable_t)child);
       pagetable[i] = 0;
-    } else if(pte & PTE_V){
+    } else if(pte & PTE_V){ // is's leaf && this leaf is valid
       panic("freewalk: leaf");
     }
   }
@@ -314,10 +317,13 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+    if((pte = walk(old, i, 0)) == 0) { // level 2 or level 1 ‘s pte is not valid
+      continue; // lab 4.3
+    }
+    if((*pte & PTE_V) == 0) {  // level 0 's pte is not valid
+      continue; // lab 4.3
+    }
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -355,12 +361,26 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-
+  struct proc* p = myproc();
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    // lab 4.3
+    if (pa0 == 0) {
+        if (va0 >= p->sz) { // access out of bounds
+            return -1;
+        } else if (va0 < p->trapframe->sp) { // access guard page
+            return -1;
+        } else {
+            if (true_alloc(va0) == -1) {
+                return -1;
+            }
+        }
+    }
+    pa0 = walkaddr(pagetable, va0);
+    //if(pa0 == 0)
+      //return -1;
+    // lab 4.3
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -380,12 +400,26 @@ int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   uint64 n, va0, pa0;
-
+  struct proc* p = myproc();
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    // lab 4.3
+    if (pa0 == 0) {
+        if (va0 >= p->sz) { // access out of bounds
+            return -1;
+        } else if (va0 < p->trapframe->sp) { // access guard page
+            return -1;
+        } else {
+            if (true_alloc(va0) == -1) {
+                return -1;
+            }
+        }
+    }
+    pa0 = walkaddr(pagetable, va0);
+    //if(pa0 == 0)
+      //return -1;
+    // lab 4.3
     n = PGSIZE - (srcva - va0);
     if(n > len)
       n = len;
@@ -407,12 +441,26 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
   uint64 n, va0, pa0;
   int got_null = 0;
-
+  struct proc* p = myproc();
   while(got_null == 0 && max > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    // lab 4.3
+    if (pa0 == 0) {
+        if (va0 >= p->sz) { // access out of bounds
+            return -1;
+        } else if (va0 < p->trapframe->sp) { // access guard page
+            return -1;
+        } else {
+            if (true_alloc(va0) == -1) {
+                return -1;
+            }
+        }
+    }
+    pa0 = walkaddr(pagetable, va0);
+    //if(pa0 == 0)
+      //return -1;
+    // lab 4.3
     n = PGSIZE - (srcva - va0);
     if(n > max)
       n = max;
@@ -439,4 +487,23 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int true_alloc(uint64 va) {
+    struct proc* p = myproc();
+    va = PGROUNDDOWN(va);
+    // 1.alloc page
+    char* mem  = kalloc();
+    if(mem == 0) {
+        return -1;
+    }
+    memset(mem, 0, PGSIZE);
+
+    // 2.return user space
+    if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+        kfree(mem);
+        panic("process page fault, but mappages fail");
+    }
+
+    return 0;
 }

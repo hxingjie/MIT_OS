@@ -47,8 +47,19 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+
+  // 4.1
+  //   if(growproc(n) < 0)
+  //     return -1;
+  if (n < 0) { // 缩小的话立即释放
+    if(growproc(n) < 0)
+      return -1;
+  } else {
+    myproc()->sz += n;
+  }
+  
+  // 4.1
+
   return addr;
 }
 

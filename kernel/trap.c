@@ -67,6 +67,18 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 13 || r_scause() == 15) { // lab 4.2
+    // process lazy sbrk
+    uint64 tar_va = r_stval(); // 导致页面错误的用户地址空间的虚拟地址
+    if (tar_va >= p->sz) { // access out of bounds
+        p->killed = 1;
+    } else if (tar_va < p->trapframe->sp) { // access guard page
+        p->killed = 1;
+    } else {
+        if (true_alloc(tar_va) == -1) {
+            p->killed = 1;
+        }
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
