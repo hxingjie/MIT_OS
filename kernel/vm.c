@@ -305,34 +305,56 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
-int
-uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
-{
-  pte_t *pte;
-  uint64 pa, i;
-  uint flags;
-  char *mem;
+int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz) {
+    uint64 i;
+    for(i = 0; i < sz; i += PGSIZE){
+        pte_t* pte = walk(old, i, 0);
+        if(pte == 0)
+            panic("uvmcopy: pte should exist");
+        if((*pte & PTE_V) == 0)
+            panic("uvmcopy: page not present");
 
-  for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+        uint64 pa = PTE2PA(*pte);
+        *pte &= ~PTE_W; // 不可写
+        *pte |= PTE_COW; // 标记为cow
+        uint flags = PTE_FLAGS(*pte);
+
+        if(mappages(new, i, PGSIZE, pa, flags) != 0){ // 映射到新页表
+            // frees all shared page
+            uvmunmap(new, 0, i / PGSIZE, 1);
+            return -1; // 没有内存创建页表
+        }
+
+        // share page success
+        update_record(pa, 1);
     }
-  }
-  return 0;
+    return 0;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
+//     pte_t *pte;
+//     uint64 pa, i;
+//     uint flags;
+//     char *mem;
+
+//     for(i = 0; i < sz; i += PGSIZE){
+//         if((pte = walk(old, i, 0)) == 0)
+//             panic("uvmcopy: pte should exist");
+//         if((*pte & PTE_V) == 0)
+//             panic("uvmcopy: page not present");
+//         pa = PTE2PA(*pte);
+//         flags = PTE_FLAGS(*pte);
+//         if((mem = kalloc()) == 0)
+//             goto err;
+//         memmove(mem, (char*)pa, PGSIZE);
+//         if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+//             kfree(mem);
+//             goto err;
+//         }
+//     }
+//     return 0;
+
+//  err:
+//     uvmunmap(new, 0, i / PGSIZE, 1);
+//     return -1;
 }
 
 // mark a PTE invalid for user access.
@@ -358,12 +380,31 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if (va0 >= MAXVA) {
+        return -1;
+    }
+
+    // my code
+    pte_t* pte = walk(pagetable, va0, 0);
+    if (pte == 0)
+        return -1; // va0没有映射物理地址
+    
+    uint flags = PTE_FLAGS(*pte);
+    // todo check if can write
+    if (PTE2RSW(flags) == 1) {
+        if (cow_alloc(pagetable, va0) == -1) {
+            return -1; // cow fail
+        }
+    }
+    // my code
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
+
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
     len -= n;
@@ -439,4 +480,34 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int cow_alloc(pagetable_t pagetable, uint64 srcva) {
+    srcva = PGROUNDDOWN(srcva); // 向下去整获得页地址
+
+    // 获取pte
+    pte_t* pte = walk(pagetable, srcva, 0);
+    if(pte == 0)
+        panic("cow_alloc: pte should exist");
+    if((*pte & PTE_V) == 0)
+        panic("cow_alloc: page not present");
+
+    // 获取物理地址，分配新的页面，复制页面
+    uint64 pa_old = PTE2PA(*pte);
+    char* pa_new = kalloc();
+    if(pa_new == 0) { // 没有可用内存
+        return -1;
+    }
+
+    // cow success
+    memmove(pa_new, (char*)pa_old, PGSIZE);
+    kfree((void*)pa_old);
+    
+    // 处理pte
+    uint flags = PTE_FLAGS(*pte);
+    *pte = PA2PTE(pa_new) | flags; // 更新pa
+    *pte |= PTE_W; // 更新写权限
+    *pte &= ~PTE_COW; // 更新cow标志
+
+    return 0;
 }

@@ -67,6 +67,24 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 15) {
+    // rsw dagu xwrv
+    //  01 1101 1011
+    uint64 va = r_stval();
+    pte_t* pte = walk(p->pagetable, va, 0);
+    uint flags = PTE_FLAGS(*pte);
+    if (PTE2RSW(flags) == 1) { // cow引起的写错误
+        if (cow_alloc(p->pagetable, va) == -1) {
+            //printf("cow fail, kill\n");
+            p->killed = 1;
+        } else {
+            //printf("cow succecc\n");
+        }
+    } else {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
