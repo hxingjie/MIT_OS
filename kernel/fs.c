@@ -259,8 +259,10 @@ iget(uint dev, uint inum)
   }
 
   // Recycle an inode cache entry.
-  if(empty == 0)
+  //printf("inum: {%d}\n", inum);
+  if(empty == 0) {
     panic("iget: no inodes");
+  }
 
   ip = empty;
   ip->dev = dev;
@@ -387,7 +389,7 @@ bmap(struct inode *ip, uint bn)
   }
   bn -= NDIRECT;
 
-  if(bn < NINDIRECT){
+  if(bn < NINDIRECT){ // access indirect block
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0)
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
@@ -400,6 +402,39 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
+
+  if (bn < NDOUBLEINDIRECT) { // access double indirect block
+    uint double_indirect_1 = 0;
+    uint double_indirect_2 = 0;
+
+    if((double_indirect_1 = ip->addrs[NDIRECT+1]) == 0)
+      ip->addrs[NDIRECT+1] = double_indirect_1 = balloc(ip->dev); // alloc double_indirect_1 block
+
+    // read/write double_indirect_1
+    struct buf* buf_1 = bread(ip->dev, double_indirect_1);
+    uint* data_1 = (uint*)buf_1->data;
+    uint idx_1 = bn / NINDIRECT;
+
+    if((double_indirect_2 = data_1[idx_1]) == 0){
+      data_1[idx_1] = double_indirect_2 = balloc(ip->dev); // alloc double_indirect_2 block
+      log_write(buf_1);
+    }
+    brelse(buf_1);
+
+    // read/write double_indirect_2
+    struct buf* buf_2 = bread(ip->dev, double_indirect_2);
+    uint* data_2 = (uint*)buf_2->data;
+    uint idx_2 = bn % NINDIRECT;
+
+    if((addr = data_2[idx_2]) == 0){
+      data_2[idx_2] = addr = balloc(ip->dev); // alloc data block
+      log_write(buf_2);
+    }
+    brelse(buf_2);
+
+    return addr;
+  }
 
   panic("bmap: out of range");
 }
@@ -409,27 +444,51 @@ bmap(struct inode *ip, uint bn)
 void
 itrunc(struct inode *ip)
 {
-  int i, j;
+  int i, j, k;
   struct buf *bp;
   uint *a;
-
+  
+  // clear direct
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
       ip->addrs[i] = 0;
     }
   }
-
+  
+  // clear indirect
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
       if(a[j])
-        bfree(ip->dev, a[j]);
+        bfree(ip->dev, a[j]); // free data block
     }
     brelse(bp);
-    bfree(ip->dev, ip->addrs[NDIRECT]);
+    bfree(ip->dev, ip->addrs[NDIRECT]); // free indirect block
     ip->addrs[NDIRECT] = 0;
+  }
+
+  // clear double indirect
+  if(ip->addrs[NDIRECT+1]){
+    struct buf* buf_1 = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    uint* data_1 = (uint*)buf_1->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(data_1[j]) {
+        struct buf* buf_2 = bread(ip->dev, data_1[j]);
+        uint* data_2 = (uint*)buf_2->data;
+        for(k = 0; k < NINDIRECT; k++){
+            if(data_2[k]) {
+                bfree(ip->dev, data_2[k]); // free data block
+            }
+        }
+        brelse(buf_2);
+        bfree(ip->dev, data_1[j]); // free double indirect_2 block
+      }
+    }
+    brelse(buf_1);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]); // free double indirect_1 block
+    ip->addrs[NDIRECT+1] = 0;
   }
 
   ip->size = 0;
@@ -538,13 +597,13 @@ dirlookup(struct inode *dp, char *name, uint *poff)
   for(off = 0; off < dp->size; off += sizeof(de)){
     if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
-    if(de.inum == 0)
+    if(de.inum == 0) // 该目录项为空
       continue;
     if(namecmp(name, de.name) == 0){
       // entry matches path element
-      if(poff)
+      if(poff) // 该目录项在当前目录文件的data blocks中的字节偏移量
         *poff = off;
-      inum = de.inum;
+      inum = de.inum; // 待查找文件的inode
       return iget(dp->dev, inum);
     }
   }
@@ -631,9 +690,9 @@ namex(char *path, int nameiparent, char *name)
   struct inode *ip, *next;
 
   if(*path == '/')
-    ip = iget(ROOTDEV, ROOTINO);
+    ip = iget(ROOTDEV, ROOTINO); // begin with root dir
   else
-    ip = idup(myproc()->cwd);
+    ip = idup(myproc()->cwd); // begin with cur dir
 
   while((path = skipelem(path, name)) != 0){
     ilock(ip);
@@ -663,6 +722,7 @@ namex(char *path, int nameiparent, char *name)
 struct inode*
 namei(char *path)
 {
+  // char *path -> inode*
   char name[DIRSIZ];
   return namex(path, 0, name);
 }
@@ -670,5 +730,7 @@ namei(char *path)
 struct inode*
 nameiparent(char *path, char *name)
 {
+  // it stops before the last element, 
+  // returning the inode of the parent directory and copying the final element into name.
   return namex(path, 1, name);
 }

@@ -120,6 +120,7 @@ uint64
 sys_link(void)
 {
   char name[DIRSIZ], new[MAXPATH], old[MAXPATH];
+  // old is a file, add dirent(old's inode num, new's last name) to new's parent dir
   struct inode *dp, *ip;
 
   if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
@@ -315,6 +316,58 @@ sys_open(void)
       return -1;
     }
   }
+    
+    // my code
+    if (ip->type == T_SYMLINK) {
+        if (!(omode & O_NOFOLLOW)) {
+            int flag = 0;
+            for (int i = 0; i < 10; i++) {
+                char target[MAXPATH];
+                readi(ip, 0, (uint64)target, 0, MAXPATH);
+                iunlockput(ip);
+
+                if((ip = namei(target)) == 0){
+                    end_op();
+                    return -1;
+                }
+                ilock(ip);
+                
+                if (ip->type == T_SYMLINK) {
+                    continue;
+                } else if (ip->type == T_FILE) {
+                    flag = 1;
+                    break;
+                } else {
+                    iunlockput(ip);
+                    end_op();
+                    return -1;
+                }
+            }
+            if (flag == 0) {
+                iunlockput(ip);
+                end_op();
+                return -1;
+            }
+        }
+        if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+            if(f)
+                fileclose(f);
+            iunlockput(ip);
+            end_op();
+            return -1;
+        }
+        f->type = FD_INODE;
+        f->off = 0;
+        f->ip = ip;
+        f->readable = !(omode & O_WRONLY);
+        f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+
+        iunlock(ip);
+        end_op();
+
+        return fd;
+    }
+    // my code
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
@@ -483,4 +536,38 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64 sys_symlink(void) {
+    // char* target, char* path
+    char target[MAXPATH];
+    char path[MAXPATH];
+
+    // read arguments
+    if((argstr(0, target, MAXPATH)) < 0 || (argstr(1, path, MAXPATH)) < 0)
+        return -1;
+
+    struct inode* ip;
+    begin_op();
+    // if((ip = namei(path)) != 0){
+    //     ilock(ip);
+    //     printf("this path is exist\n");
+    //     iunlock(ip);
+    //     end_op();
+    //     return -1;
+    // }
+
+    // create inode
+    ip = create(path, T_SYMLINK, 0, 0);
+    if(ip == 0){ // create inode fail
+        end_op();
+        return -1;
+    }
+
+    writei(ip, 0, (uint64)target, 0, MAXPATH);
+
+    iunlockput(ip);
+    end_op();
+
+    return 0;
 }

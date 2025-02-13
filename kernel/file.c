@@ -17,7 +17,9 @@ struct devsw devsw[NDEV];
 struct {
   struct spinlock lock;
   struct file file[NFILE];
-} ftable;
+} ftable; // 系统中所有打开的文件都保存在全局文件表 ftable
+// 文件表具有分配文件（filealloc）、创建重复引用（filedup）、
+// 释放引用（fileclose）以及读取和写入数据（fileread和filewrite）的函数。
 
 void
 fileinit(void)
