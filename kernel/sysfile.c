@@ -484,3 +484,186 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64 sys_mmap(void) {
+    // void *mmap(void *addr, int length, int prot, int flags,
+    //           int fd, int offset);
+    uint64 addr;
+    int length, prot, flags, fd, offset;
+    if (argaddr(0, &addr) < 0 || argint(1, &length) < 0
+        || argint(2, &prot) < 0 || argint(3, &flags) < 0
+        || argint(4, &fd) < 0 || argint(5, &offset) < 0) {
+        return -1;
+    }
+     
+    struct proc* p = myproc();
+
+    // mmap doesn't allow read/write mapping of a file opened read-only.
+    struct file* mmapfile = p->ofile[fd];
+    if (flags == MAP_SHARED && (prot & PROT_WRITE) && mmapfile->writable == 0) {
+        return -1;
+    }
+
+    // lazy alloc
+    int page_cnt = length % PGSIZE == 0 ? length / PGSIZE : length / PGSIZE + 1;
+    uint64 unused_pages[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    int idx = 0;
+    
+    // find unused region
+    for (uint64 va = PGROUNDUP(p->sz); va < MAXVA && idx < page_cnt; va += PGSIZE) {
+        pte_t* pte = walk(p->pagetable, va, 1);
+        if (pte == 0) { // kalloc fail
+            for (int i = 0; i < idx; i++) { // free writed pte
+                pte_t* tmp = walk(p->pagetable, unused_pages[i], 0);
+                *tmp = 0;
+            }
+            printf("kalloc fail\n");
+            return -1;
+        }
+
+        if (*pte & PTE_V) {
+            // unused_pages must continue
+            for (int i = 0; i < idx; i++) { // free writed pte
+                pte_t* tmp = walk(p->pagetable, unused_pages[i], 0);
+                *tmp = 0;
+            }
+            idx = 0;
+            continue;
+        } else { // find unused page
+            unused_pages[idx] = va;
+            idx += 1;
+            *pte |= 1 << 8; // set rsw to 01
+            *pte |= (prot & (PROT_EXEC | PROT_WRITE | PROT_READ)) << 1; // set XWR
+            *pte |= PTE_U;
+            //printf("pte: %x\n", *pte);
+        }
+
+    }
+    if (idx < page_cnt) { // find unused page fail
+        printf("no enough free page\n");
+        return -1;
+    }
+
+    filedup(p->ofile[fd]);
+
+    int idx_regions;
+    for (idx_regions = 0; idx_regions < 16; idx_regions++) {
+        if (p->mmap_regions[idx_regions].used == 0) {
+            p->mmap_regions[idx_regions].used = 1;
+            p->mmap_regions[idx_regions].va = unused_pages[0];
+            p->mmap_regions[idx_regions].length = length;
+            p->mmap_regions[idx_regions].cur_length = length;
+            p->mmap_regions[idx_regions].permission = prot;
+            p->mmap_regions[idx_regions].map_type = flags;
+            p->mmap_regions[idx_regions].offset = offset;
+            p->mmap_regions[idx_regions].mmap_file = p->ofile[fd];
+            break;
+        }
+    }
+    if (idx_regions == 16) { // no enough free mmap_regions
+        for (int i = 0; i < idx; i++) { // free writed pte
+            pte_t* tmp = walk(p->pagetable, unused_pages[i], 0);
+            *tmp = 0;
+        }
+        return -1;
+    }
+
+    p->sz += length;
+
+    return unused_pages[0];
+}
+
+void va2regions(uint64 va, int* i_regions, int* j_regions) {
+    // va should align with page
+    struct proc* p = myproc();
+    int i = 0, j = 0;
+    for (i = 0; i < 16; i++) {
+        if (p->mmap_regions[i].used == 1) {
+            // init page_cnt
+            int page_cnt;
+            if (p->mmap_regions[i].length % PGSIZE == 0) {
+                page_cnt = p->mmap_regions[i].length / PGSIZE;
+            } else {
+                page_cnt = p->mmap_regions[i].length / PGSIZE + 1;
+            }
+
+            // find the region
+            for (j = 0; j < page_cnt; j++) {
+                if (va == p->mmap_regions[i].va + j*PGSIZE) {
+                    break;
+                }
+            }
+
+            if (j < page_cnt) {
+                break;
+            }
+        }
+    }
+    
+    if (i == 16) {
+        panic("no this mapped file");
+    }
+
+    *i_regions = i;
+    *j_regions = j;
+}
+
+void read_from_mmapfile(uint64 va) {
+    // read file
+    va = PGROUNDDOWN(va);
+    
+    int i_regions, j_regions;
+    va2regions(va, &i_regions, &j_regions);
+
+    struct inode* ip = myproc()->mmap_regions[i_regions].mmap_file->ip;
+    ilock(ip);
+    readi(ip, 1, va, j_regions*PGSIZE, PGSIZE);
+    iunlock(ip);
+}
+
+uint64 sys_munmap(void) {
+    // int munmap(addr, length);
+    uint64 beg_va;
+    int length;
+    if (argaddr(0, &beg_va) < 0 || argint(1, &length) < 0) {
+        return -1;
+    }
+    
+    // 1.find the VMA for the address range and unmap the specified pages (hint: use uvmunmap).
+    if (beg_va != PGROUNDDOWN(beg_va)) {
+        panic("sys_munmap, not align");
+    }
+
+    struct proc* p = myproc();
+    int unmap_page_cnt = length % PGSIZE == 0 ? length / PGSIZE : length / PGSIZE + 1;
+    for (int i = 0; i < unmap_page_cnt; i++) {
+        uint64 va = beg_va + i * PGSIZE;
+        int i_regions, j_regions;
+        va2regions(va, &i_regions, &j_regions);
+
+        pte_t* pte = walk(p->pagetable, va, 0);
+
+        // write back to file
+        if (*pte & PTE_V && p->mmap_regions[i_regions].map_type == MAP_SHARED) {
+            filewrite(p->mmap_regions[i_regions].mmap_file, va, PGSIZE);
+        }
+
+        // update pagetable
+        uvmunmap(p->pagetable, va, 1, 1); // unmap in pagetable and free data page
+        p->sz -= PGSIZE;
+
+        // update p->mmap_regions
+        if (p->mmap_regions[i_regions].cur_length > PGSIZE) {
+            // va not need to update
+            p->mmap_regions[i_regions].cur_length -= PGSIZE;
+        } else {
+            // subtract file's ref
+            fileclose(p->mmap_regions[i_regions].mmap_file);
+            // free this mmap_region
+            p->mmap_regions[i_regions].used = 0;
+        }
+        
+    }
+
+    return 0;
+}

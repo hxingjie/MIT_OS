@@ -171,9 +171,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
-    if(PTE_FLAGS(*pte) == PTE_V)
+    if((*pte & PTE_V) == 0) { // lazy alloc
+        *pte = 0;
+        continue;
+    }
+    if(PTE_FLAGS(*pte) == PTE_V) // flag is 00 0000 0001, this pte is not a leaf
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
@@ -305,8 +307,16 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+
+    // my code
+    if((*pte & PTE_V) == 0) {
+        pte_t* n_pte = walk(new, i, 1);
+        *n_pte = *pte;
+        continue;
+        //panic("uvmcopy: page not present");
+    }
+    // my code
+      
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -428,4 +438,19 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+uint64 myalloc(pagetable_t pagetable, uint64 va) {
+    va = PGROUNDDOWN(va);
+    char *mem;
+    mem = (char*)kalloc();
+    
+    if(mem == 0){ // kalloc fail
+        return -1;
+    }
+    memset(mem, 0, PGSIZE); // init data page
+    pte_t* pte = walk(pagetable, va, 0);
+    *pte |= PA2PTE(mem) | PTE_V; // set pa and valid
+
+    return 0;
 }

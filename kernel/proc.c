@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -133,6 +134,10 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  
+  for (int i = 0; i < 16; i++) {
+    p->mmap_regions[i].used = 0;
+  }
 
   return p;
 }
@@ -296,6 +301,15 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  // my code
+  for (i = 0; i < 16; i++) {
+    np->mmap_regions[i] = p->mmap_regions[i];
+    if (np->mmap_regions[i].used == 1) {
+        filedup(np->mmap_regions[i].mmap_file);
+    }
+  }
+  // my code
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -343,6 +357,48 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // my code
+  for (int i = 0; i < 16; i++) {
+    if (p->mmap_regions[i].used == 1) {
+        uint64 beg_va = p->mmap_regions[i].va;
+        int page_cnt;
+        if (p->mmap_regions[i].length % PGSIZE == 0) {
+            page_cnt = p->mmap_regions[i].length / PGSIZE;
+        } else {
+            page_cnt = p->mmap_regions[i].length / PGSIZE + 1;
+        }
+        
+        for (int j = 0; j < page_cnt; j++) {
+            uint64 va = beg_va + j * PGSIZE;
+            pte_t* pte = walk(p->pagetable, va, 0);
+            if (*pte == 0) { // 已经调用 munmap 释放了
+                continue;
+            }
+
+            // write back to file
+            if (*pte & PTE_V && p->mmap_regions[i].map_type == MAP_SHARED) {
+                filewrite(p->mmap_regions[i].mmap_file, va, PGSIZE);
+            }
+
+            // update pagetable
+            uvmunmap(p->pagetable, va, 1, 1); // unmap in pagetable and free data page
+            p->sz -= PGSIZE;
+
+            // update p->mmap_regions
+            if (p->mmap_regions[i].cur_length > PGSIZE) {
+                // va not need to update
+                p->mmap_regions[i].cur_length -= PGSIZE;
+            } else {
+                // subtract file's ref
+                fileclose(p->mmap_regions[i].mmap_file);
+                // free this mmap_region
+                p->mmap_regions[i].used = 0;
+            }
+        }
+    }
+  }
+  // my code
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
