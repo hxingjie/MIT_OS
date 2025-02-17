@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -94,4 +95,32 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64 sys_trace(void) { // lab2 trace
+    int mask;
+    argint(0, &mask); // 读取参数
+    
+    myproc()->mask = mask; // 设置mask
+
+    return 0;
+}
+
+// kernel/sysproc.c
+uint64 sys_sysinfo(void) { // lab2 sysinfo
+    uint64 freemem = get_freemem();
+    uint64 cnt = get_proc_cnt();
+    struct sysinfo info = {freemem, cnt};
+
+    uint64 user_addr;
+    // 读取user_addr参数
+    if (argaddr(0, &user_addr) < 0) {
+      return -1;
+    }
+    // 写入user_addr
+    if (copyout(myproc()->pagetable, user_addr, (char *)&info, sizeof(info)) < 0) {
+      return -1;
+    }
+
+    return 0;
 }

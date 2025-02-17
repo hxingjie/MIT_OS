@@ -103,4 +103,7 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // lab2 trace
+  int mask; // 使用32位bit记录不同的系统调用是否被trace
 };

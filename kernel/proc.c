@@ -275,6 +275,8 @@ fork(void)
   }
   np->sz = p->sz;
 
+  np->mask = p->mask;
+
   np->parent = p;
 
   // copy saved user registers.
@@ -692,4 +694,14 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 get_proc_cnt() { // lab2 sysinfo
+    uint64 cnt = 0;
+    for (int i = 0; i < NPROC; i++) {
+        if (proc[i].state != UNUSED) {
+            cnt += 1;
+        }
+    }
+    return cnt;
 }
