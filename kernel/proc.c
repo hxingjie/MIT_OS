@@ -34,12 +34,12 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      //char *pa = kalloc();
+      //if(pa == 0)
+      //  panic("kalloc");
+      //uint64 va = KSTACK((int) (p - proc));
+      //kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      //p->kstack = va;
   }
   kvminithart();
 }
@@ -120,6 +120,22 @@ found:
     release(&p->lock);
     return 0;
   }
+  
+  // An user's kernel pagetable
+  p->kernel_pt = kvminit_user();
+  if (p->kernel_pt == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // 创建进程的内核栈
+  char *pa = kalloc();
+  if(pa == 0)
+    panic("kalloc");
+  uint64 va = KSTACK((int) (p - proc));
+  kvmmap_user(p->kernel_pt, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -142,6 +158,20 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+
+  if (p->kstack) {
+    uint64 pa = walkaddr_kernel_pt(p->kernel_pt, p->kstack);
+    if (pa == 0)
+      panic("freeproc");
+    kfree((void*) pa);
+  }
+  p->kstack = 0;
+
+  if (p->kernel_pt) {
+    freewalk_kernel_pt(p->kernel_pt);
+  }
+  p->kernel_pt = 0;
+
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -221,6 +251,8 @@ userinit(void)
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+  copy_pagetable(p->pagetable, p->kernel_pt, 0, p->sz); // lab3 3.3
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -246,8 +278,18 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    uint64 cur_page_addr = PGROUNDDOWN(p->sz - 1); // 原地址空间的最大页地址
+    uint64 last_page_addr = PGROUNDDOWN(p->sz - 1 + n); // 扩大后的地址空间的最大页地址
+    if (cur_page_addr < last_page_addr) {
+      copy_pagetable(p->pagetable, p->kernel_pt, cur_page_addr + PGSIZE, n);
+    }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uint64 cur_page_addr = PGROUNDDOWN(p->sz - 1); // 原地址空间的最大页地址
+    uint64 last_page_addr = PGROUNDDOWN(p->sz - 1 + n); // 缩小后的地址空间的最大页地址
+    if (cur_page_addr > last_page_addr) {
+      kvmunmap_user(p->kernel_pt, last_page_addr + PGSIZE, -n); // 缩小页表映射范围
+    }
   }
   p->sz = sz;
   return 0;
@@ -274,6 +316,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  copy_pagetable(np->pagetable, np->kernel_pt, 0, np->sz);
 
   np->parent = p;
 
@@ -473,11 +516,17 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        w_satp(MAKE_SATP(p->kernel_pt)); // lab 3
+        sfence_vma(); // lab 3
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+
+        kvminithart(); // lab 3
 
         found = 1;
       }
