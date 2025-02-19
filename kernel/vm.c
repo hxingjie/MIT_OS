@@ -185,8 +185,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0) // level 2 or level 1 ‘s pte is not valid
       continue; // lab 4.2
-    if((*pte & PTE_V) == 0) // level 0 's pte is not valid
+    if((*pte & PTE_V) == 0) { // level 0 's pte is not valid
+      *pte = 0;
       continue; // lab 4.2
+    }
+      
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
