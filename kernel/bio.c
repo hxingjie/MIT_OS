@@ -287,9 +287,9 @@ brelse(struct buf *b)
   if(!holdingsleep(&b->lock))
     panic("brelse");
 
+  uint idx = b->blockno % MYNUM;
   releasesleep(&b->lock);
 
-  uint idx = b->blockno % MYNUM;
   //acquire(&bcache.lock); // debug
   acquire(&bcache.bucket_lock[idx]);
 
