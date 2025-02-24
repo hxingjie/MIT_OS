@@ -92,29 +92,70 @@ e1000_init(uint32 *xregs)
   regs[E1000_IMS] = (1 << 7); // RXDW -- Receiver Descriptor Write Back
 }
 
-int
-e1000_transmit(struct mbuf *m)
-{
-  //
-  // Your code here.
-  //
-  // the mbuf contains an ethernet frame; program it into
-  // the TX descriptor ring so that the e1000 sends it. Stash
-  // a pointer so that it can be freed after sending.
-  //
-  
-  return 0;
+int e1000_transmit(struct mbuf *m) {
+    //
+    // Your code here.
+    //
+    // the mbuf contains an ethernet frame; program it into
+    // the TX descriptor ring so that the e1000 sends it. Stash
+    // a pointer so that it can be freed after sending.
+    //
+
+    acquire(&e1000_lock);
+
+    uint32 idx_tx = regs[E1000_TDT];
+    struct tx_desc* p_desc = &tx_ring[idx_tx];
+    if ((p_desc->status & E1000_TXD_STAT_DD) == 0) { // 如果该 mbuf 还没有发送完毕
+        release(&e1000_lock);
+        return -1;
+    }
+
+    if (tx_mbufs[idx_tx]) {
+        mbuffree(tx_mbufs[idx_tx]);
+        tx_mbufs[idx_tx] = 0;
+    }
+
+    p_desc->addr = (uint64)m->head;
+    p_desc->length = m->len;
+    p_desc->status = 0;
+    p_desc->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+
+    tx_mbufs[idx_tx] = m;
+
+    regs[E1000_TDT] = (idx_tx+1) % TX_RING_SIZE;
+
+    release(&e1000_lock);
+
+    return 0;
 }
 
 static void
 e1000_recv(void)
 {
-  //
-  // Your code here.
-  //
-  // Check for packets that have arrived from the e1000
-  // Create and deliver an mbuf for each packet (using net_rx()).
-  //
+    //
+    // Your code here.
+    //
+    // Check for packets that have arrived from the e1000
+    // Create and deliver an mbuf for each packet (using net_rx()).
+    //
+
+    //acquire(&e1000_lock);
+    uint32 idx_rdt = (regs[E1000_RDT]+1) % RX_RING_SIZE; // next need to process
+    struct rx_desc* p_desc = &rx_ring[idx_rdt];
+    while (p_desc->status & E1000_RXD_STAT_DD) { // 如果需要处理该 mbuf
+        rx_mbufs[idx_rdt]->len = p_desc->length;
+        
+        net_rx(rx_mbufs[idx_rdt]);
+
+        rx_mbufs[idx_rdt] = mbufalloc(0);
+        p_desc->addr = (uint64)rx_mbufs[idx_rdt]->head;
+        p_desc->status = 0;
+
+        idx_rdt = (idx_rdt+1) % RX_RING_SIZE;
+        p_desc = &rx_ring[idx_rdt];
+    }
+    regs[E1000_RDT] = idx_rdt == 0 ? RX_RING_SIZE-1 : idx_rdt-1;
+    //release(&e1000_lock);
 }
 
 void
