@@ -116,6 +116,16 @@ exec(char *path, char **argv)
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
 
+  // my code
+  p->nice = 0;
+  p->vruntime = 0;
+  p->runtime = 0;
+  if (p->state != RUNNING) {
+    panic("p->state != RUNNING");
+  }
+  //printf("exec, p: %s\n", p->name);
+  // my code
+
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:

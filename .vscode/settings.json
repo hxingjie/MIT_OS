@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+        "types.h": "c",
+        "proc.h": "c",
+        "treenode.h": "c",
+        "defs.h": "c",
+        "riscv.h": "c"
+    }
+}

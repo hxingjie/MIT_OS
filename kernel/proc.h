@@ -103,4 +103,10 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // my code
+  int nice; // [-20, 19], default 0
+  float vruntime;
+  uint64 runtime;
+  // my code
 };

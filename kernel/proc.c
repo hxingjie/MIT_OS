@@ -15,6 +15,115 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
+// my code
+struct TreeNode {
+    struct proc* p;
+    struct TreeNode* left;
+    struct TreeNode* right;
+};
+
+struct TreeNode tree[NPROC];
+struct spinlock root_lock;
+struct TreeNode* tree_root;
+
+struct TreeNode* create_node() {
+    for (int i = 0; i < NPROC; i++) {
+        if (tree[i].p == 0) {
+            return &tree[i];
+        }
+    }
+    panic("create_node");
+}
+
+struct TreeNode* insert_node(struct TreeNode* root, struct proc* p) {
+    if (root == 0) {
+        struct TreeNode* node = create_node();
+        node->p = p;
+        node->left = 0;
+        node->right = 0;
+        return node;
+    }
+    //printf("insert_root, root: %s, p: %s\n", root->p->name, p->name);
+    if (p->vruntime <= root->p->vruntime) {
+        root->left = insert_node(root->left, p);
+    } else {
+        root->right = insert_node(root->right, p);
+    }
+
+    return root;
+}
+
+struct TreeNode* delete_node(struct TreeNode* root, struct proc* p) {
+    //printf("delete_root, root: %s, p: %s\n", root->p->name, p->name);
+    if (root == 0)
+        panic("delete_node");
+
+    if (p == root->p) {
+        //delete
+        if (root->left == 0 && root->right == 0) {
+            // leaf
+            root->p = 0; // delete cur node
+            return 0;
+        } else {
+            // 只有一个子节点，直接返回另一个子节点
+            if (root->left == 0) {
+                root->p = 0; // delete cur node
+                return root->right;
+            } else if (root->right == 0) {
+                root->p = 0; // delete cur node
+                return root->left;
+            }
+            // 有两个节点
+            struct TreeNode* node = root->left;
+            while (node->right) {
+                node = node->right;
+            }
+            root->left = delete_node(root->left, node->p);
+            node->left = root->left;
+            node->right = root->right;
+
+            root->p = 0; // delete cur node
+            root = node;
+        }
+    } else if (p->vruntime <= root->p->vruntime) {
+        root->left = delete_node(root->left, p);
+    } else { // key > root->val
+        root->right = delete_node(root->right, p);
+    }
+
+    return root;
+}
+
+int get_tree_cnt(struct TreeNode* root) {
+    //printf("get tree cnt, root: %p\n", root);
+    if (root == 0) {
+        return 0;
+    }
+    return 1 + get_tree_cnt(root->left) + get_tree_cnt(root->right);
+}
+
+struct proc* get_node(struct TreeNode* root) {
+    if (root == 0) {
+        return 0;
+    }
+
+    while (root->left != 0) {
+        root = root->left;
+    }
+
+    return root->p;
+}
+
+void acquire_root_lock() {
+    acquire(&root_lock);
+}
+
+void release_root_lock() {
+    release(&root_lock);
+}
+
+// my code
+
 extern void forkret(void);
 static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
@@ -41,6 +150,17 @@ procinit(void)
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
   }
+  
+  // my code
+  initlock(&root_lock, "root_lock");
+  acquire_root_lock();
+  for (int i = 0; i < NPROC; i++) {
+    tree[i].p = 0;
+  }
+  tree_root = 0;
+  release_root_lock();
+  // my code
+
   kvminithart();
 }
 
@@ -102,6 +222,7 @@ allocproc(void)
       release(&p->lock);
     }
   }
+  //printf("no unused\n");
   return 0;
 
 found:
@@ -229,6 +350,16 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
+  
+  // my code
+  p->nice = 0;
+  p->vruntime = 0;
+  p->runtime = 0;
+  acquire_root_lock();
+  //printf("insert_root, p: %s\n", p->name);
+  tree_root = insert_node(tree_root, p);
+  release_root_lock();
+  // my code
 
   release(&p->lock);
 }
@@ -294,6 +425,17 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+
+  // my code
+  np->nice = 0;
+  np->vruntime = 0;
+  np->runtime = 0;
+
+  //printf("fork, p: %s, np: %s, np's pid: %d\n", p->name, np->name, np->pid);
+  acquire_root_lock();
+  tree_root = insert_node(tree_root, np);
+  release_root_lock();
+  // my code
 
   release(&np->lock);
 
@@ -382,6 +524,12 @@ exit(int status)
   // Parent might be sleeping in wait().
   wakeup1(original_parent);
 
+  //my code
+  if (p->state != RUNNING) {
+    panic("p->state != RUNNING");
+  }
+  //my code
+
   p->xstate = status;
   p->state = ZOMBIE;
 
@@ -453,7 +601,7 @@ wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
-void
+/*void
 scheduler(void)
 {
   struct proc *p;
@@ -475,6 +623,7 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
+
         c->proc = p;
         swtch(&c->context, &p->context);
 
@@ -487,6 +636,44 @@ scheduler(void)
     if(nproc <= 2) {   // only init and sh exist
       intr_on();
       asm volatile("wfi");
+    }
+  }
+}*/
+
+void
+scheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+  
+  c->proc = 0;
+  for(;;){
+    // Avoid deadlock by ensuring that devices can interrupt.
+    intr_on();
+    
+    acquire_root_lock();
+    p = get_node(tree_root);
+
+    if (p == 0) { // only init and sh exist
+        release_root_lock();
+
+        intr_on();
+        asm volatile("wfi");
+    } else {
+        tree_root = delete_node(tree_root, p);
+        release_root_lock();
+
+        acquire(&p->lock);
+        if (p->state != RUNNABLE) {
+            panic("scheduler");
+        }
+        p->state = RUNNING;
+
+        c->proc = p;
+        swtch(&c->context, &p->context);
+        c->proc = 0;
+
+        release(&p->lock);
     }
   }
 }
@@ -525,6 +712,14 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  
+  // my code
+  //printf("yield, p: %s, pid: %d\n", p->name, p->pid);
+  acquire_root_lock();
+  tree_root = insert_node(tree_root, p);
+  release_root_lock();
+  // my code
+
   sched();
   release(&p->lock);
 }
@@ -569,8 +764,13 @@ sleep(void *chan, struct spinlock *lk)
   }
 
   // Go to sleep.
+  if (p->state != RUNNING) {
+    panic("p->state != RUNNING");
+  }
+
   p->chan = chan;
   p->state = SLEEPING;
+  //printf("sleep, p: %s, pid: %d\n", p->name, p->pid);
 
   sched();
 
@@ -595,6 +795,13 @@ wakeup(void *chan)
     acquire(&p->lock);
     if(p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;
+
+      //my code
+      //printf("wakeup, p: %s, pid: %d\n", p->name, p->pid);
+      acquire_root_lock();
+      tree_root = insert_node(tree_root, p);
+      release_root_lock();
+      //my code
     }
     release(&p->lock);
   }
@@ -609,6 +816,13 @@ wakeup1(struct proc *p)
     panic("wakeup1");
   if(p->chan == p && p->state == SLEEPING) {
     p->state = RUNNABLE;
+
+    //my code
+    //printf("wakeup1, p: %s, pid: %d\n", p->name, p->pid);
+    acquire_root_lock();
+    tree_root = insert_node(tree_root, p);
+    release_root_lock();
+    //my code
   }
 }
 
@@ -627,6 +841,13 @@ kill(int pid)
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
+
+        //my code
+        //printf("kill, p: %s, pid: %d\n", p->name, p->pid);
+        acquire_root_lock();
+        tree_root = insert_node(tree_root, p);
+        release_root_lock();
+        //my code
       }
       release(&p->lock);
       return 0;
