@@ -4,6 +4,7 @@
         "proc.h": "c",
         "treenode.h": "c",
         "defs.h": "c",
-        "riscv.h": "c"
+        "riscv.h": "c",
+        "user.h": "c"
     }
 }

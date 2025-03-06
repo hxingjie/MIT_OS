@@ -219,10 +219,10 @@ allocproc(void)
     if(p->state == UNUSED) {
       goto found;
     } else {
+      //printf("p->state: %d\n", p->state);
       release(&p->lock);
     }
   }
-  //printf("no unused\n");
   return 0;
 
 found:
@@ -431,7 +431,6 @@ fork(void)
   np->vruntime = 0;
   np->runtime = 0;
 
-  //printf("fork, p: %s, np: %s, np's pid: %d\n", p->name, np->name, np->pid);
   acquire_root_lock();
   tree_root = insert_node(tree_root, np);
   release_root_lock();
@@ -601,8 +600,8 @@ wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
-/*void
-scheduler(void)
+void
+src_scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
@@ -624,6 +623,10 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
 
+        acquire_root_lock();
+        tree_root = delete_node(tree_root, p);
+        release_root_lock();
+
         c->proc = p;
         swtch(&c->context, &p->context);
 
@@ -638,7 +641,7 @@ scheduler(void)
       asm volatile("wfi");
     }
   }
-}*/
+}
 
 void
 scheduler(void)
@@ -664,9 +667,6 @@ scheduler(void)
         release_root_lock();
 
         acquire(&p->lock);
-        if (p->state != RUNNABLE) {
-            panic("scheduler");
-        }
         p->state = RUNNING;
 
         c->proc = p;
@@ -714,6 +714,7 @@ yield(void)
   p->state = RUNNABLE;
   
   // my code
+  printf("[debug][debug][debug][debug][debug][debug]intr, %d\n", p->runtime);
   //printf("yield, p: %s, pid: %d\n", p->name, p->pid);
   acquire_root_lock();
   tree_root = insert_node(tree_root, p);
@@ -770,7 +771,6 @@ sleep(void *chan, struct spinlock *lk)
 
   p->chan = chan;
   p->state = SLEEPING;
-  //printf("sleep, p: %s, pid: %d\n", p->name, p->pid);
 
   sched();
 
@@ -914,4 +914,39 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+static const int sched_latency = 100;
+static const int nice_to_weight[40] = {
+    /* -20 */ 88761, 71755, 56483, 46273, 36291,
+    /* -15 */ 29154, 23254, 18705, 14949, 11916,
+    /* -10 */ 9548, 7620, 6100, 4904, 3906,
+    /* -5 */ 3121, 2501, 1991, 1586, 1277,
+    /* 0 */ 1024, 820, 655, 526, 423,
+    /* 5 */ 335, 272, 215, 172, 137,
+    /* 10 */ 110, 87, 70, 56, 45,
+    /* 15 */ 36, 29, 23, 18, 15,
+};
+
+float cal_vruntime(int nice, uint64 runtime) {
+    return (float)nice_to_weight[0+20] / nice_to_weight[nice+20] * runtime;
+}
+
+float get_timeslice(int nice) {
+    struct proc* p;
+    float sum = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if (p->state != UNUSED && p->state != ZOMBIE) {
+            sum += nice_to_weight[p->nice+20];
+        }
+        release(&p->lock);
+    }
+
+    float time_slice = nice_to_weight[nice+20] / sum * sched_latency;
+    if (time_slice < 50) {
+        time_slice = 50;
+    }
+
+    return time_slice;
 }

@@ -95,3 +95,13 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64 sys_set_nice(void) {
+    int nice;
+    argint(0, &nice);
+    myproc()->nice = nice;
+    return 0;
+}
+uint64 sys_get_nice(void) {
+    return myproc()->nice;
+}
