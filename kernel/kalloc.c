@@ -60,42 +60,39 @@ struct page* get_buddy_chunk(uint64 chunk, int order) {
 void insert_list(struct page* chunk) {
     // must has kmem's lock
     int order = chunk->order;
+    //acquire(&kmem.lock[order]);
+
     if (kmem.freelist[order] != 0) {
-        //printf("non null list, insert %p, order: %d\n", chunk, ((struct page*)chunk)->order);
         chunk->prev = kmem.freelist[order]->prev;
         chunk->next = kmem.freelist[order];
-
-        //printf("insert 1.1, %p\n", kmem.freelist[order]);
-        //printf("insert 1.2, %p\n", kmem.freelist[order]->prev);
-        //printf("insert 1.3, %p\n", kmem.freelist[order]->prev->next);
         
         kmem.freelist[order]->prev->next = chunk;
         kmem.freelist[order]->prev = chunk;
-        //printf("insert 2\n");
         kmem.freelist[order] = chunk;
-        //printf("insert %p success\n", chunk);
     } else {
-        //printf("null list, insert %p\n", chunk);
         chunk->prev = chunk;
         chunk->next = chunk;
         kmem.freelist[order] = chunk;
-        //printf("insert %p success\n", chunk);
     }
+
+    //release(&kmem.lock[order]);
 }
 void delete_list(struct page* chunk) {
     // must has kmem's lock
     int order = chunk->order;
+    //acquire(&kmem.lock[order]);
+
     if (chunk->next == chunk) { // only one
         kmem.freelist[order] = 0;
-        //printf("null delete list, kmem.freelist[%d]: %p\n", chunk->order, kmem.freelist[order]);
     } else {
         chunk->prev->next = chunk->next;
         chunk->next->prev = chunk->prev;
         if (kmem.freelist[order] == chunk) {
             kmem.freelist[order] = chunk->next;
         }
-        //printf("non null delete list, kmem.freelist[%d]: %p\n", chunk->order, kmem.freelist[order]);
     }
+
+    //release(&kmem.lock[order]);
 
     // reset
     chunk->prev = 0;
@@ -125,35 +122,27 @@ struct page* merge_chunk(struct page* chunk) {
     // must has kmem's lock
     // input: free chunk(not in freelist)
     // output: no need to merge, can insert to list
-    //printf("merge chunk 1: %p, order: %d\n", (void*)chunk, chunk->order);
     if (chunk->order == MAX_ORDER) {
-        //printf("merge chunk 2: %p, order: %d\n", (void*)chunk, chunk->order);
         return chunk;
     }
 
     struct page* buddy_chunk = get_buddy_chunk((uint64)chunk, chunk->order);
     if (buddy_chunk == 0) {
         // 不存在buddy, 越界
-        //printf("merge chunk 3: %p, order: %d\n", (void*)chunk, chunk->order);
         return chunk;
 
     } else if (record[PA2IDX((uint64)buddy_chunk)] > 0) {
         // 该页面不在空闲链表, 那么无论其order
-        //printf("merge chunk 4: %p, order: %d\n", (void*)chunk, chunk->order);
         return chunk;
         
     } else if (chunk->order != buddy_chunk->order) {
         // record[PA2IDX(buddy_chunk)] == 0
         // 对应的buddy pages 大小不同（已经被split了）
-        //printf("merge chunk 5: %p, order: %d\n", (void*)chunk, chunk->order);
         return chunk;
 
     } else {
-        //printf("merge chunk 6: %p, order: %d\n", (void*)chunk, chunk->order);
         // 1.del buddy from list
-        //printf("delete %p\n", buddy_chunk);
         delete_list(buddy_chunk);
-        //print_freelist();
 
         // 2.merge to more page(choose less one)
         chunk = (uint64)chunk < (uint64)buddy_chunk ? chunk : buddy_chunk;
@@ -189,6 +178,9 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+//   for (int i = 0; i < 4; i++) {
+//     initlock(&kmem.lock[i], "kmem");
+//   }
 
   for (int i = 0; i < 4; i++) {
     kmem.freelist[i] = 0;
@@ -211,7 +203,6 @@ freerange(void *pa_start, void *pa_end)
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
-    printf("kfree p: %p\n", p);
     kfree(p);
   }
     
@@ -268,11 +259,17 @@ void * kalloc(void) {
 
     struct page* chunk = 0;
     for (int cur = order; cur <= MAX_ORDER; cur += 1) {
+        //acquire(&kmem.lock[cur]);
+
         if (kmem.freelist[cur] != 0) { // find the chunk
             chunk = kmem.freelist[cur];
+            //release(&kmem.lock[cur]);
+
             delete_list(chunk); // free from list
             chunk = split_chunk(chunk, order); // split to order chunk
             break;
+        } else {
+            //release(&kmem.lock[cur]);
         }
     }
 
@@ -289,6 +286,80 @@ void * kalloc(void) {
     return (void*)chunk;
 }
 
+// Free the page of physical memory pointed at by v,
+// which normally should have been returned by a
+// call to kalloc().  (The exception is when
+// initializing the allocator; see kinit above.)
+void
+my_kfree(void *pa, int order)
+{
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+  
+  // Fill with junk to catch dangling refs.
+  memset(pa, 1, PGSIZE);
+ 
+  // init chunk
+  struct page* chunk = (struct page*)pa;
+  chunk->order = order;
+  chunk->prev = 0;
+  chunk->next = 0;
+
+  // update record
+  uint cnt = 1;
+  for (int i = 0; i < order; i++)
+    cnt *= 2;
+  int idx = PA2IDX((uint64)chunk);
+  for (int i = 0; i < cnt; i++) {
+    record[idx] = 0;
+    idx += 1;
+  }
+
+  acquire(&kmem.lock);
+
+  chunk = merge_chunk(chunk);
+  //printf("insert list, %p\n", chunk);
+  insert_list(chunk);
+
+  //print_freelist();
+  
+  release(&kmem.lock);
+}
+
+// Allocate one 4096-byte page of physical memory.
+// Returns a pointer that the kernel can use.
+// Returns 0 if the memory cannot be allocated.
+void * my_kalloc(int order) {
+    acquire(&kmem.lock);
+
+    struct page* chunk = 0;
+    for (int cur = order; cur <= MAX_ORDER; cur += 1) {
+        //acquire(&kmem.lock[cur]);
+
+        if (kmem.freelist[cur] != 0) { // find the chunk
+            chunk = kmem.freelist[cur];
+            //release(&kmem.lock[cur]);
+
+            delete_list(chunk); // free from list
+            chunk = split_chunk(chunk, order); // split to order chunk
+            break;
+        } else {
+            //release(&kmem.lock[cur]);
+        }
+    }
+
+    if (chunk != 0) {
+        uint cnt = 1;
+        for (int i = 0; i < order; i++)
+            cnt *= 2;
+        memset((char*)chunk, 5, cnt * PGSIZE); // fill with junk
+
+        record[PA2IDX((uint64)chunk)] = 1;
+    }
+
+    release(&kmem.lock);
+    return (void*)chunk;
+}
 
 // // Physical memory allocator, for user processes,
 // // kernel stacks, page-table pages,
